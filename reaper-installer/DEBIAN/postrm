@@ -1,0 +1,136 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    remove|purge)
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+
+# 尝试从 /dev/tty 读取，以便在 dpkg/apt 环境下也能与用户交互
+if [ -c /dev/tty ] && [ -r /dev/tty ]; then
+    exec < /dev/tty
+fi
+
+is_interactive() {
+    [ -t 0 ] || [ -t 1 ]
+}
+
+cleanup_desktop_files() {
+    find /usr/share/applications -maxdepth 1 -name '*reaper*.desktop' -delete 2>/dev/null || true
+    find "$HOME/.local/share/applications" -maxdepth 1 -name '*reaper*.desktop' -delete 2>/dev/null || true
+    find /usr/share/icons -maxdepth 4 -name '*reaper*' -delete 2>/dev/null || true
+    find "$HOME/.local/share/icons" -maxdepth 4 -name '*reaper*' -delete 2>/dev/null || true
+}
+
+remove_reaper_dir() {
+    local dir="$1"
+    if [ ! -d "$dir" ]; then
+        return 1
+    fi
+
+    if [ -x "$dir/uninstall-reaper.sh" ]; then
+        echo "reaper-installer: 找到官方卸载脚本，正在运行..."
+        (
+            cd "$dir"
+            ./uninstall-reaper.sh --uninstall --quiet 2>/dev/null || true
+        )
+    fi
+
+    if [ -d "$dir" ]; then
+        echo "reaper-installer: 正在删除 REAPER 目录 $dir ..."
+        rm -rf "$dir"
+    fi
+}
+
+looks_like_reaper() {
+    local dir="$1"
+    [ -x "$dir/reaper" ] || \
+    [ -f "$dir/install-reaper.sh" ] || \
+    [ -d "$dir/REAPER" ]
+}
+
+# ---------- purge 阶段：只做残留清理，不再询问 ----------
+if [ "$1" = "purge" ]; then
+    for dir in "/opt/REAPER" "$HOME/opt/REAPER"; do
+        if [ -d "$dir" ]; then
+            echo "reaper-installer: purge 阶段发现残留 $dir，正在清理..."
+            rm -rf "$dir"
+        fi
+    done
+    cleanup_desktop_files
+    echo "reaper-installer: purge 清理完成。"
+    exit 0
+fi
+
+# ---------- 以下只会在 remove 阶段执行 ----------
+
+# 1. 处理默认安装位置
+DEFAULT_DIRS=("/opt/REAPER" "$HOME/opt/REAPER")
+FOUND_DEFAULT=0
+
+for dir in "${DEFAULT_DIRS[@]}"; do
+    if [ -d "$dir" ]; then
+        FOUND_DEFAULT=1
+        echo "reaper-installer: 检测到默认安装目录 $dir"
+        remove_reaper_dir "$dir"
+    fi
+done
+
+# 2. 默认位置都不存在时，询问自定义路径
+if [ "$FOUND_DEFAULT" -eq 0 ]; then
+    if ! is_interactive; then
+        echo "reaper-installer: 未找到默认安装目录，且当前为非交互环境。"
+        echo "如果 REAPER 安装在自定义位置，请手动删除该目录。"
+        exit 0
+    fi
+
+    echo
+    echo "reaper-installer: 未在默认位置找到 REAPER 安装目录。"
+    echo "REAPER 可能被安装到了自定义路径。"
+    echo "你可以输入安装目录，脚本会尝试删除；直接回车则跳过。"
+    echo
+
+    read -r -p "请输入 REAPER 安装目录（留空跳过）: " custom_dir
+
+    if [ -z "$custom_dir" ]; then
+        echo "reaper-installer: 已跳过自定义目录删除。"
+    else
+        custom_dir="$(eval echo "$custom_dir")"
+
+        if [ ! -d "$custom_dir" ]; then
+            echo "reaper-installer: 目录不存在：$custom_dir"
+        else
+            echo
+            echo "你输入的目录是：$custom_dir"
+            echo "该目录包含以下内容（前 20 项）："
+            ls -la "$custom_dir" | head -n 20
+            echo
+
+            if looks_like_reaper "$custom_dir"; then
+                read -r -p "确定要删除该目录吗？此操作不可恢复！[y/N] " confirm
+            else
+                echo "警告：该目录看起来不像 REAPER 安装目录。"
+                read -r -p "仍要强制删除吗？[y/N] " confirm
+            fi
+
+            case "$confirm" in
+                [yY]|[yY][eE][sS])
+                    remove_reaper_dir "$custom_dir"
+                    echo "reaper-installer: 已处理 $custom_dir"
+                    ;;
+                *)
+                    echo "reaper-installer: 已取消删除。"
+                    ;;
+            esac
+        fi
+    fi
+fi
+
+# 3. 清理桌面集成文件
+cleanup_desktop_files
+
+echo "reaper-installer: REAPER 相关文件清理完成。"
+echo "用户配置目录 ~/.config/REAPER 未被删除，如需彻底清理请手动移除。"
