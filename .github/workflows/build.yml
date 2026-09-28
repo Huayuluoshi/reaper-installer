@@ -25,6 +25,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Debug page structure
+        run: |
+          curl -fsSL https://www.reaper.fm/download.php \
+            | grep -iE 'reaper|tar\.xz' | head -40
+
       - name: Detect version and available architectures
         id: detect
         run: |
