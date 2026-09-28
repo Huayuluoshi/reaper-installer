@@ -1,0 +1,15 @@
+Package: reaper-installer
+Version: 0.0.0
+Section: contrib/sound
+Priority: optional
+Architecture: amd64
+Depends: curl, tar, xz-utils, desktop-file-utils, xdg-utils
+Maintainer: Your Name <you@example.com>
+Description: REAPER installer wrapper (downloads and runs official Linux installer)
+ This package does not contain REAPER itself. During configuration (postinst),
+ it downloads the official REAPER Linux tarball matching the host architecture
+ from reaper.fm, extracts it, and executes the official install-reaper.sh script
+ so the user can interact with the installer directly.
+ .
+ Removing this package attempts to run the official uninstall logic and
+ clean up REAPER files installed under the chosen prefix.
