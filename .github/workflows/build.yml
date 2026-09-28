@@ -36,14 +36,20 @@ jobs:
           set -euo pipefail
           PAGE="$(curl -fsSL https://www.reaper.fm/download.php)"
 
+          # 页面里的链接形如 href="files/7.x/reaper780_linux_x86_64.tar.xz"
+          # 注意没有前导斜杠，所以正则从 files/ 开始
           X86_PATH="$(printf '%s' "$PAGE" \
-            | grep -oE '/files/[^"]+reaper[0-9]+_linux_x86_64\.tar\.xz' \
+            | grep -oE 'files/[^"]*reaper[0-9]+_linux_x86_64\.tar\.xz' \
             | head -1 || true)"
 
           if [ -z "$X86_PATH" ]; then
-            echo "::error::无法从 reaper.fm 下载页面提取 Linux x86_64 下载链接"
+            echo "::error::无法从页面提取 x86_64 下载路径"
+            echo "--- 诊断：包含 linux 的行 ---"
+            printf '%s' "$PAGE" | grep -i 'linux' | head -20
             exit 1
           fi
+
+          echo "X86_PATH=$X86_PATH"
 
           ENCODED="$(printf '%s' "$X86_PATH" | grep -oE 'reaper[0-9]+_linux' | grep -oE '[0-9]+')"
           MAJOR="${ENCODED:0:1}"
@@ -51,9 +57,13 @@ jobs:
           VERSION="${MAJOR}.${MINOR}"
           BASE="reaper${ENCODED}_linux"
 
+          echo "VERSION=$VERSION"
+          echo "BASE=$BASE"
+
+          # 抓取该版本所有 Linux 架构
           REAPER_ARCHS="$(printf '%s' "$PAGE" \
-            | grep -oE "${BASE}_[a-zA-Z0-9_]+\.tar\.xz" \
-            | sed -E "s/${BASE}_([a-zA-Z0-9_]+)\.tar\.xz/\1/" \
+            | grep -oE "files/[^\"]*${BASE}_[a-zA-Z0-9_]+\.tar\.xz" \
+            | sed -E "s#.*${BASE}_([a-zA-Z0-9_]+)\.tar\.xz#\1#" \
             | sort -u)"
 
           if [ -z "$REAPER_ARCHS" ]; then
@@ -89,7 +99,7 @@ jobs:
           echo "Detected REAPER ${VERSION}"
           echo "REAPER archs : ${REAPER_ARCHS//$'\n'/ }"
           echo "Debian archs : ${DEB_ARCHS}"
-
+          
       - name: Decide whether to build
         id: decide
         env:
