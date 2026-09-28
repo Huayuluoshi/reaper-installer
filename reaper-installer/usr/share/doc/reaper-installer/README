@@ -1,0 +1,17 @@
+reaper-installer
+================
+
+这是一个“虚包/安装器包”：
+- 包本身不包含 REAPER 二进制。
+- postinst 会从 reaper.fm 下载对应架构的官方 Linux tar.xz，
+  解压后运行官方的 install-reaper.sh，让用户直接与官方脚本交互。
+- postrm 会在卸载时清理 REAPER 安装目录和桌面集成文件。
+
+架构支持：
+- amd64  -> x86_64
+- i386   -> i686
+- arm64  -> aarch64
+- armhf  -> armv7l
+
+源码与构建：
+https://github.com/Huayuluoshi/reaper-installer
