@@ -1,0 +1,197 @@
+name: Build and Release REAPER Installer
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: '强制重新构建，即使 Release 已存在'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-reaper-installer
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect version and available architectures
+        id: detect
+        run: |
+          set -euo pipefail
+          PAGE="$(curl -fsSL https://www.reaper.fm/download.php)"
+
+          X86_PATH="$(printf '%s' "$PAGE" \
+            | grep -oE '/files/[^"]+reaper[0-9]+_linux_x86_64\.tar\.xz' \
+            | head -1 || true)"
+
+          if [ -z "$X86_PATH" ]; then
+            echo "::error::无法从 reaper.fm 下载页面提取 Linux x86_64 下载链接"
+            exit 1
+          fi
+
+          ENCODED="$(printf '%s' "$X86_PATH" | grep -oE 'reaper[0-9]+_linux' | grep -oE '[0-9]+')"
+          MAJOR="${ENCODED:0:1}"
+          MINOR="${ENCODED:1}"
+          VERSION="${MAJOR}.${MINOR}"
+          BASE="reaper${ENCODED}_linux"
+
+          REAPER_ARCHS="$(printf '%s' "$PAGE" \
+            | grep -oE "${BASE}_[a-zA-Z0-9_]+\.tar\.xz" \
+            | sed -E "s/${BASE}_([a-zA-Z0-9_]+)\.tar\.xz/\1/" \
+            | sort -u)"
+
+          if [ -z "$REAPER_ARCHS" ]; then
+            echo "::error::未能在页面中匹配到任何 ${BASE}_*.tar.xz 链接"
+            exit 1
+          fi
+
+          DEB_ARCHS=""
+          for RA in $REAPER_ARCHS; do
+            case "$RA" in
+              x86_64)  DA="amd64" ;;
+              i686)    DA="i386" ;;
+              aarch64) DA="arm64" ;;
+              armv7l)  DA="armhf" ;;
+              *)
+                echo "警告：未知的 REAPER 架构 $RA，跳过"
+                continue
+                ;;
+            esac
+            DEB_ARCHS="${DEB_ARCHS}${DA} "
+          done
+          DEB_ARCHS="$(echo $DEB_ARCHS | tr ' ' '\n' | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+
+          if [ -z "$DEB_ARCHS" ]; then
+            echo "::error::没有任何架构能映射到 Debian 架构名"
+            exit 1
+          fi
+
+          echo "version=${VERSION}"                    >> "$GITHUB_OUTPUT"
+          echo "reaper_archs=${REAPER_ARCHS//$'\n'/ }" >> "$GITHUB_OUTPUT"
+          echo "deb_archs=${DEB_ARCHS}"                >> "$GITHUB_OUTPUT"
+
+          echo "Detected REAPER ${VERSION}"
+          echo "REAPER archs : ${REAPER_ARCHS//$'\n'/ }"
+          echo "Debian archs : ${DEB_ARCHS}"
+
+      - name: Decide whether to build
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FORCE: ${{ github.event.inputs.force }}
+          VERSION: ${{ steps.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          if [ "${FORCE}" = "true" ]; then
+            echo "强制构建模式：如已有 Release 则先删除。"
+            gh release delete "v${VERSION}" --yes --cleanup-tag 2>/dev/null || true
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "Release v${VERSION} 已存在，跳过构建。"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Inject version into source
+        if: steps.decide.outputs.should_build == 'true'
+        env:
+          VERSION: ${{ steps.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          sed -i "s|^Version: .*|Version: ${VERSION}|" DEBIAN/control
+          sed -i "s|__REAPER_VERSION__|${VERSION}|" DEBIAN/postinst
+
+          echo "===== DEBIAN/control ====="
+          cat DEBIAN/control
+          echo "===== postinst (关键行) ====="
+          grep -nE 'REAPER_VERSION|DOWNLOAD_URL' DEBIAN/postinst || true
+
+      - name: Build deb for each detected architecture
+        id: build
+        if: steps.decide.outputs.should_build == 'true'
+        env:
+          VERSION: ${{ steps.detect.outputs.version }}
+          DEB_ARCHS: ${{ steps.detect.outputs.deb_archs }}
+        run: |
+          set -euo pipefail
+
+          BUILT_FILES=""
+          for ARCH in ${DEB_ARCHS}; do
+            BUILD_DIR="build-${ARCH}"
+            rm -rf "${BUILD_DIR}"
+            cp -a reaper-installer "${BUILD_DIR}"
+
+            sed -i "s|^Architecture: .*|Architecture: ${ARCH}|" \
+              "${BUILD_DIR}/DEBIAN/control"
+
+            chmod 755 "${BUILD_DIR}/DEBIAN/postinst" \
+                      "${BUILD_DIR}/DEBIAN/prerm" \
+                      "${BUILD_DIR}/DEBIAN/postrm"
+            chmod 644 "${BUILD_DIR}/DEBIAN/control"
+
+            OUT="reaper-installer_${VERSION}_${ARCH}.deb"
+            dpkg-deb --build --root-owner-group "${BUILD_DIR}" "${OUT}"
+            BUILT_FILES="${BUILT_FILES} ${OUT}"
+          done
+
+          echo "===== 构建产物 ====="
+          ls -la ./*.deb
+          for f in *.deb; do
+            echo "--- $f ---"
+            dpkg-deb -f "$f" Package Version Architecture
+          done
+
+          echo "files=${BUILT_FILES# }" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        if: steps.decide.outputs.should_build == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.detect.outputs.version }}
+          REAPER_ARCHS: ${{ steps.detect.outputs.reaper_archs }}
+          DEB_ARCHS: ${{ steps.detect.outputs.deb_archs }}
+          FILES: ${{ steps.build.outputs.files }}
+        run: |
+          set -euo pipefail
+
+          NOTES="自动构建，对应 REAPER ${VERSION}。
+
+          ## 页面检测到的架构
+
+          - REAPER 后缀：\`${REAPER_ARCHS}\`
+          - Debian 架构：\`${DEB_ARCHS}\`
+
+          ## 下载并安装
+
+          \`\`\`bash
+          # 按本机架构选择对应 deb，例如 amd64:
+          sudo apt install ./reaper-installer_${VERSION}_amd64.deb
+
+          # arm64:
+          sudo apt install ./reaper-installer_${VERSION}_arm64.deb
+          \`\`\`
+
+          安装时会从 reaper.fm 下载对应架构的官方安装包，并启动官方交互安装脚本。
+          卸载时 \`sudo apt remove reaper-installer\` 会清理 REAPER 安装目录。"
+
+          gh release create "v${VERSION}" \
+            --title "REAPER Installer v${VERSION}" \
+            --notes "${NOTES}" \
+            ${FILES}
