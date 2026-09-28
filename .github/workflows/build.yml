@@ -130,13 +130,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          sed -i "s|^Version: .*|Version: ${VERSION}|" DEBIAN/control
-          sed -i "s|__REAPER_VERSION__|${VERSION}|" DEBIAN/postinst
+          sed -i "s|^Version: .*|Version: ${VERSION}|" reaper-installer/DEBIAN/control
+          sed -i "s|__REAPER_VERSION__|${VERSION}|" reaper-installer/DEBIAN/postinst
 
           echo "===== DEBIAN/control ====="
-          cat DEBIAN/control
+          cat reaper-installer/DEBIAN/control
           echo "===== postinst (关键行) ====="
-          grep -nE 'REAPER_VERSION|DOWNLOAD_URL' DEBIAN/postinst || true
+          grep -nE 'REAPER_VERSION|DOWNLOAD_URL' reaper-installer/DEBIAN/postinst || true
 
       - name: Build deb for each detected architecture
         id: build
