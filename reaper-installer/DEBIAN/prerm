@@ -1,0 +1,12 @@
+#!/bin/bash
+set -e
+
+if [ "$1" != "remove" ] && [ "$1" != "purge" ]; then
+    exit 0
+fi
+
+if [ -d /opt/REAPER ] || [ -d "$HOME/opt/REAPER" ]; then
+    echo "reaper-installer: 检测到 REAPER 安装目录，将在包删除后尝试清理。"
+fi
+
+exit 0
