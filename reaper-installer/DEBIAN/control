@@ -4,7 +4,7 @@ Section: contrib/sound
 Priority: optional
 Architecture: amd64
 Depends: curl, tar, xz-utils, desktop-file-utils, xdg-utils
-Maintainer: Your Name <you@example.com>
+Maintainer: Huayuluoshi <2318494274@qq.com>
 Description: REAPER installer wrapper (downloads and runs official Linux installer)
  This package does not contain REAPER itself. During configuration (postinst),
  it downloads the official REAPER Linux tarball matching the host architecture
