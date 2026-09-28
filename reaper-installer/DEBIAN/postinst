@@ -1,0 +1,64 @@
+#!/bin/bash
+set -e
+
+# 只在 configure 阶段执行
+if [ "$1" != "configure" ]; then
+    exit 0
+fi
+
+# 非交互环境检测
+if [ -z "$PS1" ] && [ ! -t 0 ]; then
+    echo "reaper-installer: 非交互式安装环境，跳过 REAPER 交互安装。"
+    echo "请在普通终端中运行 'sudo dpkg-reconfigure reaper-installer' 完成安装。"
+    exit 0
+fi
+
+ARCH="$(dpkg --print-architecture)"
+case "$ARCH" in
+    amd64)  REAPER_ARCH="x86_64" ;;
+    i386)   REAPER_ARCH="i686" ;;
+    arm64)  REAPER_ARCH="aarch64" ;;
+    armhf)  REAPER_ARCH="armv7l" ;;
+    *)
+        echo "reaper-installer: 不支持的架构: $ARCH" >&2
+        exit 1
+        ;;
+esac
+
+# 由构建流程注入版本号，例如 7.80
+REAPER_VERSION="__REAPER_VERSION__"
+MAJOR="${REAPER_VERSION%%.*}"
+REAPER_TARBALL="reaper${REAPER_VERSION//./}_linux_${REAPER_ARCH}.tar.xz"
+DOWNLOAD_URL="https://www.reaper.fm/files/${MAJOR}.x/${REAPER_TARBALL}"
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
+
+echo "正在从 reaper.fm 下载 REAPER Linux 安装包..."
+echo "URL: $DOWNLOAD_URL"
+
+if ! curl -fL --retry 3 -o "$TMPDIR/$REAPER_TARBALL" "$DOWNLOAD_URL"; then
+    echo "reaper-installer: 下载失败：$DOWNLOAD_URL" >&2
+    echo "请检查网络连接，或确认 REAPER 官方是否已发布该版本/架构。" >&2
+    exit 1
+fi
+
+echo "正在解压..."
+tar -xJf "$TMPDIR/$REAPER_TARBALL" -C "$TMPDIR"
+
+EXTRACT_DIR="$(find "$TMPDIR" -maxdepth 1 -type d -name 'reaper_linux_*' | head -n1)"
+if [ -z "$EXTRACT_DIR" ] || [ ! -x "$EXTRACT_DIR/install-reaper.sh" ]; then
+    echo "reaper-installer: 解压目录中未找到 install-reaper.sh" >&2
+    exit 1
+fi
+
+echo "启动官方 REAPER 安装脚本，请按照提示完成安装。"
+echo "注意：官方脚本可能会要求 sudo 密码以安装到 /opt。"
+echo
+
+cd "$EXTRACT_DIR"
+./install-reaper.sh
+
+echo
+echo "官方安装脚本已结束。"
+echo "如果安装成功，REAPER 应已出现在应用程序菜单中。"
