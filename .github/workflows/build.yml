@@ -106,20 +106,59 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FORCE: ${{ github.event.inputs.force }}
           VERSION: ${{ steps.detect.outputs.version }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
 
+          NEW_TAG="v${VERSION}"
+
+          # ① 手动勾选 force：直接删除已有 Release（如有），强制重建
           if [ "${FORCE}" = "true" ]; then
-            echo "强制构建模式：如已有 Release 则先删除。"
-            gh release delete "v${VERSION}" --yes --cleanup-tag 2>/dev/null || true
+            echo "强制构建模式：如已有 Release ${NEW_TAG} 则先删除。"
+            gh release delete "${NEW_TAG}" --yes --cleanup-tag 2>/dev/null || true
             echo "should_build=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          if gh release view "v${VERSION}" >/dev/null 2>&1; then
-            echo "Release v${VERSION} 已存在，跳过构建。"
+          # ② 查询当前最新 Release（仅匹配 vX.Y 形式），没有则视为 v0.0
+          LATEST_TAG="$(gh release list --limit 100 --json tagName -q '.[].tagName' 2>/dev/null \
+            | grep -E '^v[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+          LATEST_TAG="${LATEST_TAG:-v0.0}"
+          echo "最新 Release: ${LATEST_TAG}, 检测到的版本: ${NEW_TAG}"
+
+          # ③ 判断是否有版本更新
+          HIGHEST="$(printf '%s\n%s\n' "${LATEST_TAG}" "${NEW_TAG}" | sort -V | tail -1)"
+          if [ "${HIGHEST}" = "${NEW_TAG}" ] && [ "${NEW_TAG}" != "${LATEST_TAG}" ]; then
+            HAS_UPDATE=true
+          else
+            HAS_UPDATE=false
+          fi
+
+          # ④ 手动触发（workflow_dispatch）：不做版本对比，只判断 Release 是否已存在
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
+              echo "手动触发，但 Release ${NEW_TAG} 已存在，跳过（如需重建请勾选 force）。"
+              echo "should_build=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "手动触发，Release ${NEW_TAG} 不存在，开始构建。"
+              echo "should_build=true" >> "$GITHUB_OUTPUT"
+            fi
+            exit 0
+          fi
+
+          # ⑤ 定时触发（schedule）：无版本更新则直接跳过
+          if [ "${HAS_UPDATE}" != "true" ]; then
+            echo "定时触发：未检测到版本更新（最新 ${LATEST_TAG}，检测 ${NEW_TAG}），跳过构建。"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # ⑥ 定时触发且有版本更新：再兜底确认一次 Release 是否已存在
+          if gh release view "${NEW_TAG}" >/dev/null 2>&1; then
+            echo "Release ${NEW_TAG} 已存在，跳过构建。"
             echo "should_build=false" >> "$GITHUB_OUTPUT"
           else
+            echo "定时触发：检测到新版本 ${NEW_TAG}，开始构建。"
             echo "should_build=true" >> "$GITHUB_OUTPUT"
           fi
 
