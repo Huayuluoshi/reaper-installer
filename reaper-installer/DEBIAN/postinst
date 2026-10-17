@@ -1,18 +1,28 @@
 #!/bin/bash
 set -e
 
-# 只在 configure 阶段执行
+CACHE_DIR="/var/cache/reaper-installer"
+TMPDIR=""
+
+# 无论成功、失败、非交互跳过，退出时缓存必然被清理
+cleanup_all() {
+    [ -n "$TMPDIR" ] && rm -rf "$TMPDIR"
+    rm -rf "$CACHE_DIR"
+}
+trap cleanup_all EXIT
+
 if [ "$1" != "configure" ]; then
     exit 0
 fi
 
-# 非交互环境检测
+# 非交互环境跳过交互安装
 if [ -z "$PS1" ] && [ ! -t 0 ]; then
-    echo "reaper-installer: 非交互式安装环境，跳过 REAPER 交互安装。"
-    echo "请在普通终端中运行 'sudo dpkg-reconfigure reaper-installer' 完成安装。"
+    echo "reaper-installer: 非交互式环境，跳过 REAPER 交互安装。"
+    echo "请稍后在普通终端运行： sudo dpkg-reconfigure reaper-installer"
     exit 0
 fi
 
+# ---- 架构映射 ----
 ARCH="$(dpkg --print-architecture)"
 case "$ARCH" in
     amd64)  REAPER_ARCH="x86_64" ;;
@@ -25,24 +35,53 @@ case "$ARCH" in
         ;;
 esac
 
-# 由构建流程注入版本号，例如 7.80
+# ---- 版本与下载地址 ----
 REAPER_VERSION="__REAPER_VERSION__"
 MAJOR="${REAPER_VERSION%%.*}"
 REAPER_TARBALL="reaper${REAPER_VERSION//./}_linux_${REAPER_ARCH}.tar.xz"
 DOWNLOAD_URL="https://www.reaper.fm/files/${MAJOR}.x/${REAPER_TARBALL}"
+CACHE_FILE="$CACHE_DIR/$REAPER_TARBALL"
+
+# 缓存缺失时自行下载：覆盖 dpkg-reconfigure（preinst 不运行）场景
+if [ ! -s "$CACHE_FILE" ]; then
+    if command -v wget >/dev/null 2>&1; then
+        DOWNLOADER="wget"
+    elif command -v curl >/dev/null 2>&1; then
+        DOWNLOADER="curl"
+    else
+        echo "reaper-installer: 系统缺少 wget 和 curl，无法下载安装包。" >&2
+        echo "请先安装其中之一： sudo apt install wget" >&2
+        exit 1
+    fi
+
+    echo "正在下载 REAPER Linux 安装包（$DOWNLOADER）..."
+    echo "URL: $DOWNLOAD_URL"
+
+    mkdir -p "$CACHE_DIR"
+    OK=0
+    if [ "$DOWNLOADER" = "wget" ]; then
+        wget -nv --tries=3 --connect-timeout=15 --read-timeout=60 \
+             -O "$CACHE_FILE" "$DOWNLOAD_URL" || OK=$?
+    else
+        curl -fL --retry 3 --connect-timeout 15 \
+             -o "$CACHE_FILE" "$DOWNLOAD_URL" || OK=$?
+    fi
+
+    if [ "$OK" -ne 0 ]; then
+        echo "reaper-installer: 下载失败（$DOWNLOADER 退出码 $OK）：$DOWNLOAD_URL" >&2
+        echo "请检查网络连接，或确认 REAPER 官方是否已发布该版本/架构。" >&2
+        if [ "$DOWNLOADER" = "wget" ]; then
+            echo "若报错包含 'certificate ... is not trusted'，请先执行： sudo apt install ca-certificates" >&2
+        else
+            echo "若报错为 curl (60)，请先执行： sudo apt install ca-certificates" >&2
+        fi
+        exit 1
+    fi
+fi
 
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
-
-CACHE_FILE="/var/cache/reaper-installer/$REAPER_TARBALL"
-if [ ! -s "$CACHE_FILE" ]; then
-    echo "reaper-installer: 未找到缓存，请运行 sudo dpkg-reconfigure reaper-installer" >&2
-    exit 1
-fi
-cp "$CACHE_FILE" "$TMPDIR/$REAPER_TARBALL"
-
 echo "正在解压..."
-tar -xJf "$TMPDIR/$REAPER_TARBALL" -C "$TMPDIR"
+tar -xJf "$CACHE_FILE" -C "$TMPDIR"
 
 EXTRACT_DIR="$(find "$TMPDIR" -maxdepth 1 -type d -name 'reaper_linux_*' | head -n1)"
 if [ -z "$EXTRACT_DIR" ] || [ ! -x "$EXTRACT_DIR/install-reaper.sh" ]; then
