@@ -6,6 +6,7 @@ Architecture: amd64
 Depends: wget | curl, tar, xz-utils, desktop-file-utils, xdg-utils
 Recommends: ca-certificates
 Maintainer: Huayuluoshi <2318494274@qq.com>
+Installed-Size: 20000
 Description: REAPER installer wrapper (downloads and runs official Linux installer)
  This package does not contain REAPER itself. During configuration (postinst),
  it downloads the official REAPER Linux tarball matching the host architecture
