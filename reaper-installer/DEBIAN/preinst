@@ -1,35 +1,96 @@
 #!/bin/bash
 set -e
 
+# preinst 的 $1: install | upgrade | abort-upgrade | abort-remove
 case "$1" in
     install|upgrade) ;;
     *) exit 0 ;;
 esac
 
-# 非交互环境跳过，交给 postinst 处理
+# 非交互环境（自动化 apt、CI、stdin 非 tty）跳过预下载。
+# 对应的 postinst 在非交互时也会跳过并提示 dpkg-reconfigure，
+# 因此这里跳过不会导致 postinst 因缺缓存而失败。
 if [ -z "$PS1" ] && [ ! -t 0 ]; then
+    echo "reaper-installer: 非交互式安装环境，跳过预下载。"
     exit 0
 fi
 
+# ---- 架构映射 ----
 ARCH="$(dpkg --print-architecture)"
-# ... 架构映射（同现有 postinst）...
+case "$ARCH" in
+    amd64)  REAPER_ARCH="x86_64" ;;
+    i386)   REAPER_ARCH="i686" ;;
+    arm64)  REAPER_ARCH="aarch64" ;;
+    armhf)  REAPER_ARCH="armv7l" ;;
+    *)
+        echo "reaper-installer: 不支持的架构: $ARCH" >&2
+        exit 1
+        ;;
+esac
 
+# ---- 版本与下载地址（由构建流程注入版本号）----
 REAPER_VERSION="__REAPER_VERSION__"
 MAJOR="${REAPER_VERSION%%.*}"
 REAPER_TARBALL="reaper${REAPER_VERSION//./}_linux_${REAPER_ARCH}.tar.xz"
 DOWNLOAD_URL="https://www.reaper.fm/files/${MAJOR}.x/${REAPER_TARBALL}"
-CACHE_FILE="/var/cache/reaper-installer/$REAPER_TARBALL"
 
-[ -s "$CACHE_FILE" ] && exit 0   # 已有缓存直接通过
+CACHE_DIR="/var/cache/reaper-installer"
+CACHE_FILE="$CACHE_DIR/$REAPER_TARBALL"
 
-mkdir -p /var/cache/reaper-installer
+# 已有完整缓存（重装 / dpkg-reconfigure / 升级同版本）直接通过
+if [ -s "$CACHE_FILE" ]; then
+    echo "reaper-installer: 检测到缓存 ${CACHE_FILE}，跳过预下载。"
+    exit 0
+fi
+
+# ---- 选择下载器：默认 wget，回退 curl ----
+if command -v wget >/dev/null 2>&1; then
+    DOWNLOADER="wget"
+elif command -v curl >/dev/null 2>&1; then
+    DOWNLOADER="curl"
+else
+    echo "reaper-installer: 系统缺少 wget 和 curl，无法下载安装包。" >&2
+    echo "请先安装其中之一： sudo apt install wget" >&2
+    exit 1
+fi
+
+# ---- 准备缓存目录与临时文件 ----
+mkdir -p "$CACHE_DIR"
 TMP_FILE="${CACHE_FILE}.part.$$"
-trap 'rm -f "$TMP_FILE"' EXIT
 
-if ! curl -fL --retry 3 --connect-timeout 15 -o "$TMP_FILE" "$DOWNLOAD_URL"; then
-    echo "reaper-installer: 下载失败，安装中止。" >&2
-    exit 1   # preinst 非 0 退出 → dpkg 中止安装，不残留
+cleanup() {
+    rm -f "$TMP_FILE"
+    # 目录为空时顺手删掉；非空时 rmdir 失败被忽略，不影响已有缓存
+    rmdir "$CACHE_DIR" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+echo "正在预下载 REAPER Linux 安装包（$DOWNLOADER）..."
+echo "URL: $DOWNLOAD_URL"
+
+# 用 || OK=$? 保留真实退出码，便于日志定位（DNS=6、HTTP 4xx/5xx 等）
+OK=0
+if [ "$DOWNLOADER" = "wget" ]; then
+    wget -nv --tries=3 --connect-timeout=15 --read-timeout=60 \
+         -O "$TMP_FILE" "$DOWNLOAD_URL" || OK=$?
+else
+    curl -fL --retry 3 --connect-timeout 15 \
+         -o "$TMP_FILE" "$DOWNLOAD_URL" || OK=$?
+fi
+
+if [ "$OK" -ne 0 ]; then
+    echo "reaper-installer: 下载失败（$DOWNLOADER 退出码 $OK）：$DOWNLOAD_URL" >&2
+    echo "请检查网络连接，或确认 REAPER 官方是否已发布该版本/架构。" >&2
+    if [ "$DOWNLOADER" = "wget" ]; then
+        echo "若报错包含 'certificate ... is not trusted'，请先执行： sudo apt install ca-certificates" >&2
+    else
+        echo "若报错为 curl (60)，请先执行： sudo apt install ca-certificates" >&2
+    fi
+    exit 1
 fi
 
 mv "$TMP_FILE" "$CACHE_FILE"
-trap - EXIT
+trap - EXIT   # 已落盘，解除清理
+
+echo "reaper-installer: 预下载完成。"
+exit 0
