@@ -37,11 +37,12 @@ trap 'rm -rf "$TMPDIR"' EXIT
 echo "正在从 reaper.fm 下载 REAPER Linux 安装包..."
 echo "URL: $DOWNLOAD_URL"
 
-if ! curl -fL --retry 3 -o "$TMPDIR/$REAPER_TARBALL" "$DOWNLOAD_URL"; then
-    echo "reaper-installer: 下载失败：$DOWNLOAD_URL" >&2
-    echo "请检查网络连接，或确认 REAPER 官方是否已发布该版本/架构。" >&2
+CACHE_FILE="/var/cache/reaper-installer/$REAPER_TARBALL"
+if [ ! -s "$CACHE_FILE" ]; then
+    echo "reaper-installer: 未找到缓存，请运行 sudo dpkg-reconfigure reaper-installer" >&2
     exit 1
 fi
+cp "$CACHE_FILE" "$TMPDIR/$REAPER_TARBALL"
 
 echo "正在解压..."
 tar -xJf "$TMPDIR/$REAPER_TARBALL" -C "$TMPDIR"
