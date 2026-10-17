@@ -170,6 +170,7 @@ jobs:
           set -euo pipefail
 
           sed -i "s|^Version: .*|Version: ${VERSION}|" reaper-installer/DEBIAN/control
+          sed -i "s|__REAPER_VERSION__|${VERSION}|" reaper-installer/DEBIAN/preinst
           sed -i "s|__REAPER_VERSION__|${VERSION}|" reaper-installer/DEBIAN/postinst
 
           echo "===== DEBIAN/control ====="
@@ -196,6 +197,7 @@ jobs:
               "${BUILD_DIR}/DEBIAN/control"
 
             chmod 755 "${BUILD_DIR}/DEBIAN/postinst" \
+                      "${BUILD_DIR}/DEBIAN/preinst" \
                       "${BUILD_DIR}/DEBIAN/prerm" \
                       "${BUILD_DIR}/DEBIAN/postrm"
             chmod 644 "${BUILD_DIR}/DEBIAN/control"
