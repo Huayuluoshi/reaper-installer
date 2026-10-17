@@ -34,9 +34,6 @@ DOWNLOAD_URL="https://www.reaper.fm/files/${MAJOR}.x/${REAPER_TARBALL}"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
-echo "正在从 reaper.fm 下载 REAPER Linux 安装包..."
-echo "URL: $DOWNLOAD_URL"
-
 CACHE_FILE="/var/cache/reaper-installer/$REAPER_TARBALL"
 if [ ! -s "$CACHE_FILE" ]; then
     echo "reaper-installer: 未找到缓存，请运行 sudo dpkg-reconfigure reaper-installer" >&2
