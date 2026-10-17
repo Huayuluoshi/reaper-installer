@@ -1,0 +1,35 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    install|upgrade) ;;
+    *) exit 0 ;;
+esac
+
+# 非交互环境跳过，交给 postinst 处理
+if [ -z "$PS1" ] && [ ! -t 0 ]; then
+    exit 0
+fi
+
+ARCH="$(dpkg --print-architecture)"
+# ... 架构映射（同现有 postinst）...
+
+REAPER_VERSION="__REAPER_VERSION__"
+MAJOR="${REAPER_VERSION%%.*}"
+REAPER_TARBALL="reaper${REAPER_VERSION//./}_linux_${REAPER_ARCH}.tar.xz"
+DOWNLOAD_URL="https://www.reaper.fm/files/${MAJOR}.x/${REAPER_TARBALL}"
+CACHE_FILE="/var/cache/reaper-installer/$REAPER_TARBALL"
+
+[ -s "$CACHE_FILE" ] && exit 0   # 已有缓存直接通过
+
+mkdir -p /var/cache/reaper-installer
+TMP_FILE="${CACHE_FILE}.part.$$"
+trap 'rm -f "$TMP_FILE"' EXIT
+
+if ! curl -fL --retry 3 --connect-timeout 15 -o "$TMP_FILE" "$DOWNLOAD_URL"; then
+    echo "reaper-installer: 下载失败，安装中止。" >&2
+    exit 1   # preinst 非 0 退出 → dpkg 中止安装，不残留
+fi
+
+mv "$TMP_FILE" "$CACHE_FILE"
+trap - EXIT
